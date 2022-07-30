@@ -4,7 +4,7 @@ import (
 	"log"
 	"time"
 
-	sim "github.com/micmonay/simconnect"
+	sim "github.com/ahugues/simconnect"
 )
 
 func connect() *sim.EasySimConnect {
