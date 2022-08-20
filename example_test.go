@@ -7,7 +7,7 @@ import (
 	sim "github.com/ahugues/simconnect"
 )
 
-func connect() *sim.EasySimConnect {
+func connect() sim.EasySimConnect {
 	sc, err := sim.NewEasySimConnect()
 	if err != nil {
 		panic(err)
