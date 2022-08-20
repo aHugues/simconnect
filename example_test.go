@@ -5,14 +5,14 @@ import (
 	"time"
 
 	sim "github.com/ahugues/simconnect"
+	"github.com/sirupsen/logrus"
 )
 
 func connect() sim.EasySimConnect {
-	sc, err := sim.NewEasySimConnect()
+	sc, err := sim.NewEasySimConnect(logrus.New())
 	if err != nil {
 		panic(err)
 	}
-	sc.SetLoggerLevel(sim.LogInfo)
 	c, err := sc.Connect("MyApp")
 	if err != nil {
 		panic(err)
@@ -96,7 +96,7 @@ type ExampleSetSimVar struct {
 	Speed          float64 `sim:"AIRSPEED INDICATED" simUnit:"Knots"`
 }
 
-//Example_iFaceSetSimVar Example how to use interface for assign value in simulator actualy support only float64
+// Example_iFaceSetSimVar Example how to use interface for assign value in simulator actualy support only float64
 func Example_iFaceSetSimVar() {
 	sc := connect()
 	iFace := ExampleSetSimVar{
@@ -110,7 +110,6 @@ func Example_iFaceSetSimVar() {
 	// NOEXEC Output:
 }
 
-//
 func Example_setSimVar() {
 	sc := connect()
 	newalt := sim.SimVarPlaneAltitude()
@@ -200,7 +199,7 @@ func Example_showText() {
 	// Output:
 }
 
-//Example_simEvent You can wait chan if you will surre the event has finish with succes. If your app finish before all event probably not effect.
+// Example_simEvent You can wait chan if you will surre the event has finish with succes. If your app finish before all event probably not effect.
 func Example_simEvent() {
 	sc := connect()
 	aileronsSet := sc.NewSimEvent(sim.KeyAxisAileronsSet)

@@ -8,19 +8,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// EasySimConnectLogLevel is a type of Log level
-type EasySimConnectLogLevel int
-
-// Log Level
-const (
-	LogNo EasySimConnectLogLevel = iota
-	LogError
-	LogWarn
-	LogInfo
-)
-
 type EasySimConnect interface {
-	SetLoggerLevel(level EasySimConnectLogLevel)
 	Close() <-chan bool
 	IsAlive() bool
 	SetDelay(t time.Duration)
@@ -54,19 +42,18 @@ type concreteEasySimConnect struct {
 	indexEvent   uint32
 	listEvent    map[uint32]func(interface{})
 	listSimEvent map[KeySimEvent]SimEvent
-	logLevel     EasySimConnectLogLevel
+	log          *logrus.Logger
 	cOpen        chan bool
 	alive        bool
 	cException   chan *SIMCONNECT_RECV_EXCEPTION
 }
 
 // NewEasySimConnect create instance of EasySimConnect
-func NewEasySimConnect() (EasySimConnect, error) {
+func NewEasySimConnect(l *logrus.Logger) (EasySimConnect, error) {
 	sc, err := NewSimConnect()
 	if err != nil {
 		return nil, err
 	}
-	logrus.SetFormatter(&logrus.TextFormatter{ForceColors: true})
 	return &concreteEasySimConnect{
 		sc,
 		100 * time.Millisecond,
@@ -75,16 +62,11 @@ func NewEasySimConnect() (EasySimConnect, error) {
 		0,
 		make(map[uint32]func(interface{})),
 		make(map[KeySimEvent]SimEvent),
-		LogNo,
+		l,
 		make(chan bool, 1),
 		true,
 		make(chan *SIMCONNECT_RECV_EXCEPTION),
 	}, nil
-}
-
-// SetLoggerLevel you can set log level in EasySimConnect
-func (esc *concreteEasySimConnect) SetLoggerLevel(level EasySimConnectLogLevel) {
-	esc.logLevel = level
 }
 
 // Close Finishing EasySimConnect, All object created with this EasySimConnect's instance is perished after call this function
@@ -113,21 +95,6 @@ func (esc *concreteEasySimConnect) Connect(appName string) (<-chan bool, error) 
 	return esc.cOpen, nil
 }
 
-func (esc *concreteEasySimConnect) logf(level EasySimConnectLogLevel, format string, args ...interface{}) {
-	if level > esc.logLevel {
-		return
-	}
-	if level == LogInfo {
-		logrus.Infof(format, args...)
-	}
-	if level == LogWarn {
-		logrus.Warnf(format, args...)
-	}
-	if level == LogError {
-		logrus.Errorf(format, args...)
-	}
-}
-
 func (esc *concreteEasySimConnect) runDispatch() {
 	for esc.alive {
 		var ppdata unsafe.Pointer
@@ -140,20 +107,20 @@ func (esc *concreteEasySimConnect) runDispatch() {
 		}
 		buf, err := convCBytesToGoBytes(ppdata, int(pcbData))
 		if err != nil {
-			esc.logf(LogError, "%v#", err)
+			esc.log.Errorf("%v#", err)
 			continue
 		}
 		recvInfo := *(*SIMCONNECT_RECV)(ppdata)
 		switch recvInfo.dwID {
 		case SIMCONNECT_RECV_ID_OPEN:
 			recv := *(*SIMCONNECT_RECV_OPEN)(ppdata)
-			esc.logf(LogInfo, "Connected to %s", convStrToGoString(recv.szApplicationName[:]))
+			esc.log.Infof("Connected to %s", convStrToGoString(recv.szApplicationName[:]))
 			esc.cOpen <- true
 		case SIMCONNECT_RECV_ID_EVENT:
 			recv := *(*SIMCONNECT_RECV_EVENT)(ppdata)
 			cb, found := esc.listEvent[recv.uEventID]
 			if !found {
-				esc.logf(LogInfo, "Ignored event : %#v\n", recv)
+				esc.log.Infof("Ignored event : %#v\n", recv)
 				continue
 			}
 			cb(recv)
@@ -170,16 +137,16 @@ func (esc *concreteEasySimConnect) runDispatch() {
 			case esc.cException <- recv:
 			case <-time.After(100 * time.Millisecond):
 			}
-			esc.logf(LogInfo, "SimConnect Exception : %s %#v\n", getTextException(recv.dwException), *recv)
+			esc.log.Infof("SimConnect Exception : %s %#v\n", getTextException(recv.dwException), *recv)
 		case SIMCONNECT_RECV_ID_SIMOBJECT_DATA, SIMCONNECT_RECV_ID_SIMOBJECT_DATA_BYTYPE:
 			recv := *(*SIMCONNECT_RECV_SIMOBJECT_DATA)(ppdata)
 			if len(esc.listSimVar) < int(recv.dwDefineID) {
-				esc.logf(LogWarn, "ListSimVar not found: %#v\n %#v\n %d>=%d", recv, esc.listSimVar, len(esc.listSimVar), int(recv.dwDefineID))
+				esc.log.Warnf("ListSimVar not found: %#v\n %#v\n %d>=%d", recv, esc.listSimVar, len(esc.listSimVar), int(recv.dwDefineID))
 				continue
 			}
 			listSimVar := esc.listSimVar[recv.dwDefineID]
 			if len(listSimVar) != int(recv.dwDefineCount) {
-				esc.logf(LogWarn, "ListSimVar size not equal %#v ?= %#v\n", int(recv.dwDefineCount), len(listSimVar))
+				esc.log.Warnf("ListSimVar size not equal %#v ?= %#v\n", int(recv.dwDefineCount), len(listSimVar))
 				continue
 			}
 			position := int(unsafe.Offsetof(recv.dwData))
@@ -187,7 +154,7 @@ func (esc *concreteEasySimConnect) runDispatch() {
 			for i, simVar := range listSimVar {
 				size := simVar.GetSize()
 				if position+size > int(pcbData) {
-					esc.logf(LogError, "slice bounds out of range")
+					esc.log.Errorf("slice bounds out of range")
 					break
 				}
 				simVar.data = buf[position : position+size]
@@ -204,7 +171,7 @@ func (esc *concreteEasySimConnect) runDispatch() {
 			}()
 
 		default:
-			esc.logf(LogInfo, "%#v\n", recvInfo)
+			esc.log.Infof("%#v\n", recvInfo)
 		}
 	}
 	esc.sc.Close()
@@ -218,7 +185,7 @@ func (esc *concreteEasySimConnect) ConnectToSimVar(listSimVar ...SimVar) (<-chan
 	for i, simVar := range listSimVar {
 		err, id := esc.sc.AddToDataDefinition(defineID, simVar.getNameForDataDefinition(), simVar.getUnitForDataDefinition(), simVar.GetDatumType(), 0, uint32(i))
 		if err != nil {
-			esc.logf(LogInfo, "Error add SimVar ( %s ) in AddToDataDefinition error : %#v", simVar.Name, err)
+			esc.log.Infof("Error add SimVar ( %s ) in AddToDataDefinition error : %#v", simVar.Name, err)
 			return nil, fmt.Errorf(
 				"Error add SimVar ( %s ) in AddToDataDefinition error : %#v",
 				simVar.Name,
@@ -254,7 +221,7 @@ func (esc *concreteEasySimConnect) ConnectToSimVar(listSimVar ...SimVar) (<-chan
 func (esc *concreteEasySimConnect) ConnectToSimVarObject(listSimVar ...SimVar) <-chan []SimVar {
 	c, err := esc.ConnectToSimVar(listSimVar...)
 	if err != nil {
-		esc.logf(LogError, err.Error())
+		esc.log.Error(err.Error())
 		return make(<-chan []SimVar)
 	}
 	return c
@@ -296,18 +263,18 @@ func (esc *concreteEasySimConnect) SetSimObject(simVar SimVar) {
 	defineID := uint32(1 << 30)
 	err, _ := esc.sc.AddToDataDefinition(defineID, simVar.Name, simVar.getUnitForDataDefinition(), simVar.GetDatumType(), 0, 0)
 	if err != nil {
-		esc.logf(LogInfo, "Error add SimVar ( %s ) in AddToDataDefinition error : %#v", simVar.Name, err)
+		esc.log.Infof("Error add SimVar ( %s ) in AddToDataDefinition error : %#v", simVar.Name, err)
 		return
 	}
 	//esc.listSimVar = append(esc.listSimVar, []*SimVar{&simVar})
 	err, _ = esc.sc.SetDataOnSimObject(defineID, SIMCONNECT_OBJECT_ID_USER, 0, 0, uint32(len(simVar.data)), simVar.data)
 	if err != nil {
-		esc.logf(LogInfo, "Error add SimVar ( %s ) in SetDataOnSimObject error : %#v", simVar.Name, err)
+		esc.log.Infof("Error add SimVar ( %s ) in SetDataOnSimObject error : %#v", simVar.Name, err)
 		return
 	}
 	err, _ = esc.sc.ClearDataDefinition(uint32(defineID))
 	if err != nil {
-		esc.logf(LogInfo, "Error add SimVar ( %s ) in ClearDataDefinition error : %#v", simVar.Name, err)
+		esc.log.Infof("Error add SimVar ( %s ) in ClearDataDefinition error : %#v", simVar.Name, err)
 		return
 	}
 }
@@ -316,7 +283,7 @@ func (esc *concreteEasySimConnect) connectSysEvent(name SystemEvent, cb func(int
 	esc.listEvent[esc.indexEvent] = cb
 	err, _ := esc.sc.SubscribeToSystemEvent(uint32(esc.indexEvent), name)
 	if err != nil {
-		esc.logf(LogInfo, "Error connect to Event %s in ConnectSysEventCrashed error : %#v", name, err)
+		esc.log.Infof("Error connect to Event %s in ConnectSysEventCrashed error : %#v", name, err)
 	}
 }
 
